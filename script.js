@@ -1,67 +1,69 @@
+let localConnection;
+let remoteConnection;
+let screenStream;
+let db = firebase.firestore();
 
-    setupPeerConnection();
-
-
-    // Get the offer from Firestore and set it as the remote description
-    const sessionData = await sessionDoc.get();
-    const offer = sessionData.data().offer;
-    if (offer) {
-        await remoteConnection.setRemoteDescription(new RTCSessionDescription(JSON.parse(offer)));
-
-
-        // Create an answer and set it as the local description
-        const answer = await remoteConnection.createAnswer();
-        await remoteConnection.setLocalDescription(answer);
-        await sessionDoc.update({ answer: JSON.stringify(answer) });
+// Start screen sharing
+async function startScreenShare() {
+    try {
+        screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+        document.getElementById('sharedScreen').srcObject = screenStream;
+        setupPeerConnection();
+    } catch (error) {
+        console.error("Error capturing screen:", error);
     }
-
-
-    // Listen for ICE candidates from Firestore
-    sessionDoc.onSnapshot((snapshot) => {
-        const data = snapshot.data();
-        if (data && data.candidate) {
-            const candidate = new RTCIceCandidate(JSON.parse(data.candidate));
-            remoteConnection.addIceCandidate(candidate);
-        }
-    });
 }
 
-
-// Set up WebRTC peer connection and handle ICE candidates
-function setupPeerConnection(stream) {
-    const servers = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+// Set up WebRTC peer connection
+function setupPeerConnection() {
+    const servers = {
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+    };
     localConnection = new RTCPeerConnection(servers);
     remoteConnection = new RTCPeerConnection(servers);
 
+    screenStream.getTracks().forEach(track => localConnection.addTrack(track, screenStream));
 
-    // Add screen stream to local connection if present
-    if (stream) {
-        stream.getTracks().forEach(track => localConnection.addTrack(track, stream));
-    }
-
-
-    // Set up ICE candidate listeners
-    localConnection.onicecandidate = (event) => {
+    localConnection.onicecandidate = event => {
         if (event.candidate) {
-            sessionDoc.update({ candidate: JSON.stringify(event.candidate) });
+            db.collection("sessions").doc("session").set({
+                ice: event.candidate
+            }, { merge: true });
         }
     };
 
-
-    remoteConnection.onicecandidate = (event) => {
-        if (event.candidate) {
-            sessionDoc.update({ candidate: JSON.stringify(event.candidate) });
-        }
-    };
-
-
-    // Remote connection receives track
-    remoteConnection.ontrack = (event) => {
+    remoteConnection.ontrack = event => {
         document.getElementById('remoteScreen').srcObject = event.streams[0];
     };
+
+    db.collection("sessions").doc("session").onSnapshot(async snapshot => {
+        const data = snapshot.data();
+        if (data && data.offer) {
+            await remoteConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
+            const answer = await remoteConnection.createAnswer();
+            await remoteConnection.setLocalDescription(answer);
+            db.collection("sessions").doc("session").set({ answer });
+        } else if (data && data.answer) {
+            await localConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+        }
+    });
+
+    createOffer();
 }
 
+// Create an offer
+async function createOffer() {
+    const offer = await localConnection.createOffer();
+    await localConnection.setLocalDescription(offer);
+    db.collection("sessions").doc("session").set({ offer });
+}
 
-// Event listeners for buttons
+// Join the session
+function joinSession() {
+    alert("Join session feature is coming soon!");
+}
+
+// Event listeners
 document.getElementById("startSharing").addEventListener("click", startScreenShare);
 document.getElementById("joinSession").addEventListener("click", joinSession);
+
